@@ -1,15 +1,3 @@
-"""
-RAG API — baseado na Atividade 4 da disciplina de IA
-Transforme seu notebook em um serviço FastAPI completo.
-
-Como rodar:
-    pip install fastapi uvicorn python-multipart docling rank-bm25 \
-                sentence-transformers faiss-cpu openai
-   
-    export LLM_API_KEY="m71D5aqDATPQt_GV_3nmdO8nK8wB4Vb5PzV-d4bRGYc"
-    uvicorn rag_api:app --reload
-"""
-
 import os
 import re
 import tempfile
@@ -19,8 +7,8 @@ import faiss
 from pathlib import Path
 from typing import Literal
 from contextlib import asynccontextmanager
+
 from dotenv import load_dotenv
-load_dotenv()
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, model_validator
@@ -28,6 +16,8 @@ from pydantic import BaseModel, model_validator
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
 from openai import OpenAI
+
+load_dotenv()
 
 
 class RAGState:
@@ -73,8 +63,13 @@ app.add_middleware(
 
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://llm.liaufms.org/v1/gemma-3-12b-it")
-LLM_API_KEY = os.getenv("LLM_API_KEY", "coloque_sua_chave_aqui")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "google/gemma-3-12b-it")
+
+print("LLM_BASE_URL =", LLM_BASE_URL)
+print("LLM_MODEL =", LLM_MODEL)
+print("LLM_API_KEY carregada? =", bool(LLM_API_KEY))
+print("Prefixo da chave =", LLM_API_KEY[:8] if LLM_API_KEY else "vazia")
 
 LLM_CLIENT = OpenAI(
     base_url=LLM_BASE_URL,
@@ -205,18 +200,35 @@ def construir_prompt(pergunta: str, docs: list[dict]) -> str:
 
 
 def gerar_resposta(pergunta: str, docs: list[dict]) -> str:
-    if LLM_API_KEY == "coloque_sua_chave_aqui":
+    if not LLM_API_KEY:
         raise HTTPException(
             status_code=500,
-            detail="LLM_API_KEY não configurada no ambiente.",
+            detail="LLM_API_KEY não configurada no ambiente."
         )
 
     conteudo = construir_prompt(pergunta, docs)
-    resp = LLM_CLIENT.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[{"role": "user", "content": conteudo}],
-    )
-    return resp.choices[0].message.content
+
+    try:
+        resp = LLM_CLIENT.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": conteudo}],
+        )
+        return resp.choices[0].message.content
+
+    except Exception as e:
+        mensagem = str(e)
+        print("ERRO LLM:", mensagem)
+
+        if "Invalid API token" in mensagem or "401" in mensagem:
+            raise HTTPException(
+                status_code=500,
+                detail="A chave da LLM é inválida ou expirou."
+            )
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro ao gerar resposta com a LLM: {mensagem}"
+        )
 
 
 def verificar_indice():
@@ -295,22 +307,22 @@ async def upload_pdf(
     conteudo = await arquivo_recebido.read()
 
     try:
-      with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-          tmp.write(conteudo)
-          caminho_tmp = Path(tmp.name)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(conteudo)
+            caminho_tmp = Path(tmp.name)
 
-      from docling.document_converter import DocumentConverter
+        from docling.document_converter import DocumentConverter
 
-      converter = DocumentConverter()
-      resultado = converter.convert(str(caminho_tmp))
-      texto_md = resultado.document.export_to_markdown()
+        converter = DocumentConverter()
+        resultado = converter.convert(str(caminho_tmp))
+        texto_md = resultado.document.export_to_markdown()
 
     except Exception as e:
-      raise HTTPException(status_code=500, detail=f"Erro ao converter PDF: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro ao converter PDF: {e}")
 
     finally:
-      if "caminho_tmp" in locals():
-          caminho_tmp.unlink(missing_ok=True)
+        if "caminho_tmp" in locals():
+            caminho_tmp.unlink(missing_ok=True)
 
     chunks = aplicar_chunking(texto_md, estrategia, tamanho_chunk, sobreposicao)
     if not chunks:
