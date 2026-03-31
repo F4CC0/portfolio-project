@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-multipart
+docling
+rank-bm25
+sentence-transformers
+faiss-cpu
+openai
+numpy
+pydantic
+python-dotenv
